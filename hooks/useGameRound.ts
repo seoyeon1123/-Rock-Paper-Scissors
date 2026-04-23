@@ -3,10 +3,10 @@ import { useEffect, useRef, useState } from 'react';
 import {
   isValidChoice,
   judge,
-  randomChoice,
   type Choice,
   type Result,
 } from '@/lib/gameLogic';
+import { cpuPick, type Difficulty } from '@/lib/cpuStrategy';
 import type { Gesture } from '@/lib/gestureRecognition';
 
 export type Phase = 'waiting' | 'countdown' | 'result';
@@ -17,7 +17,7 @@ type Snapshot = {
   userChoice: Choice | null;
   cpuChoice: Choice | null;
   result: Result | null;
-  missedReveal: boolean; // true if last countdown ended without a valid hand
+  missedReveal: boolean;
 };
 
 const INITIAL: Snapshot = {
@@ -33,30 +33,44 @@ interface Args {
   ready: boolean;
   liveGesture: Gesture;
   getGesture: () => Gesture;
+  difficulty: Difficulty;
+  userHistory: Choice[];
+  paused: boolean; // 매치 끝나면 pause
+  onRoundEnd?: (user: Choice, cpu: Choice, result: Result) => void;
+  onCountdownTick?: (value: number) => void;
 }
 
-/**
- * Game state machine with camera-gated start:
- *
- *  waiting  ── valid hand visible for 500ms ──▶ countdown
- *  countdown── at 0 and hand valid ──▶ result
- *  countdown── at 0 and hand missing ──▶ waiting (missedReveal=true)
- *  result  ── 2s ──▶ waiting
- *
- * Design notes:
- * - `liveGesture` (throttled state) is used as a trigger in the "waiting"
- *   effect, so the countdown only begins once a hand is actually detected.
- * - `getGesture()` is called at the reveal moment to read the exact current
- *   value from a ref (unthrottled, unreactive).
- */
-export function useGameRound({ ready, liveGesture, getGesture }: Args) {
+export function useGameRound({
+  ready,
+  liveGesture,
+  getGesture,
+  difficulty,
+  userHistory,
+  paused,
+  onRoundEnd,
+  onCountdownTick,
+}: Args) {
   const [state, setState] = useState<Snapshot>(INITIAL);
 
   const getGestureRef = useRef(getGesture);
   getGestureRef.current = getGesture;
+  const onRoundEndRef = useRef(onRoundEnd);
+  onRoundEndRef.current = onRoundEnd;
+  const onCountdownTickRef = useRef(onCountdownTick);
+  onCountdownTickRef.current = onCountdownTick;
+  const difficultyRef = useRef(difficulty);
+  difficultyRef.current = difficulty;
+  const userHistoryRef = useRef(userHistory);
+  userHistoryRef.current = userHistory;
 
-  // waiting → countdown: require camera ready + valid gesture held briefly
+  // Reset when paused changes (match finished → menu)
   useEffect(() => {
+    if (paused) setState(INITIAL);
+  }, [paused]);
+
+  // waiting → countdown
+  useEffect(() => {
+    if (paused) return;
     if (state.phase !== 'waiting') return;
     if (!ready) return;
     if (!isValidChoice(liveGesture)) return;
@@ -69,7 +83,7 @@ export function useGameRound({ ready, liveGesture, getGesture }: Args) {
       );
     }, 500);
     return () => clearTimeout(t);
-  }, [state.phase, ready, liveGesture]);
+  }, [state.phase, ready, liveGesture, paused]);
 
   // countdown tick + reveal
   useEffect(() => {
@@ -78,20 +92,23 @@ export function useGameRound({ ready, liveGesture, getGesture }: Args) {
     if (state.countdown === 0) {
       const g = getGestureRef.current();
       if (!isValidChoice(g)) {
-        // No hand at reveal — abort this round, go back to waiting
         setState({ ...INITIAL, missedReveal: true });
         return;
       }
-      const cpuChoice = randomChoice();
+      const cpu = cpuPick(userHistoryRef.current, difficultyRef.current);
+      const result = judge(g, cpu);
       setState((s) => ({
         ...s,
         phase: 'result',
         userChoice: g,
-        cpuChoice,
-        result: judge(g, cpuChoice),
+        cpuChoice: cpu,
+        result,
       }));
+      onRoundEndRef.current?.(g, cpu, result);
       return;
     }
+
+    onCountdownTickRef.current?.(state.countdown);
 
     const t = setTimeout(() => {
       setState((s) => ({ ...s, countdown: s.countdown - 1 }));
@@ -99,7 +116,7 @@ export function useGameRound({ ready, liveGesture, getGesture }: Args) {
     return () => clearTimeout(t);
   }, [state.phase, state.countdown]);
 
-  // result → waiting (next round requires showing a hand again)
+  // result → waiting
   useEffect(() => {
     if (state.phase !== 'result') return;
     const t = setTimeout(() => setState(INITIAL), 2000);

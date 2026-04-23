@@ -9,10 +9,10 @@ interface Props {
 
 export const WebcamView = memo(function WebcamView({ videoRef, ready, error }: Props) {
   return (
-    <div className="relative">
+    <div className="relative w-full max-w-[640px] aspect-[4/3]">
       <video
         ref={videoRef}
-        className="rounded-xl border-2 border-slate-700 scale-x-[-1] bg-black"
+        className="w-full h-full rounded-xl border-2 border-slate-700 scale-x-[-1] bg-black object-cover"
         width={640}
         height={480}
         playsInline
