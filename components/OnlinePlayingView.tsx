@@ -3,10 +3,12 @@ import { useCallback, useState } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { Countdown } from '@/components/Countdown';
 import { GestureIndicator } from '@/components/GestureIndicator';
+import { RemoteVideo } from '@/components/RemoteVideo';
 import { ResultPanel } from '@/components/ResultPanel';
 import { WebcamView } from '@/components/WebcamView';
 import { useHandGesture } from '@/hooks/useHandGesture';
 import { useOnlineRound } from '@/hooks/useOnlineRound';
+import { useVideoCall } from '@/hooks/useVideoCall';
 import { playCountdownGo, playCountdownTick, playVictory } from '@/lib/sounds';
 import { rematch } from '@/lib/room';
 import type { GameMode, PlayerRow, RoomRow, RoundRow, Slot } from '@/lib/supabase';
@@ -42,7 +44,13 @@ export function OnlinePlayingView({
   soundEnabled,
   onLeave,
 }: Props) {
-  const { videoRef, displayGesture, getGesture, ready, error } = useHandGesture();
+  const { videoRef, displayGesture, handDetected, getGesture, ready, error, stream } =
+    useHandGesture();
+  const { remoteStream, connectionState, diag } = useVideoCall({
+    channel,
+    localStream: stream,
+    mySlot,
+  });
   const [rematchBusy, setRematchBusy] = useState(false);
 
   const me = players.find((p) => p.slot === mySlot);
@@ -65,7 +73,7 @@ export function OnlinePlayingView({
     room,
     roundsByNumber,
     ready,
-    liveGesture: displayGesture,
+    handDetected,
     getGesture,
     onCountdownTick,
   });
@@ -133,7 +141,24 @@ export function OnlinePlayingView({
         <div className="text-xs text-slate-500">라운드 {room.current_round}</div>
       </div>
 
-      <WebcamView videoRef={videoRef} ready={ready} error={error} />
+      <div className="flex flex-col sm:flex-row gap-3 w-full items-stretch justify-center">
+        <div className="flex-1 flex flex-col items-center gap-1 min-w-0">
+          <div className="text-xs text-slate-500 truncate max-w-full">
+            {me?.nickname ?? '나'}
+          </div>
+          <WebcamView videoRef={videoRef} ready={ready} error={error} />
+        </div>
+        <div className="flex-1 flex flex-col items-center gap-1 min-w-0">
+          <div className="text-xs text-slate-500 truncate max-w-full">
+            {opp?.nickname ?? '상대'}
+          </div>
+          <RemoteVideo
+            stream={remoteStream}
+            connectionState={connectionState}
+            diag={diag}
+          />
+        </div>
+      </div>
       <GestureIndicator gesture={displayGesture} />
 
       {oppDisconnected && (

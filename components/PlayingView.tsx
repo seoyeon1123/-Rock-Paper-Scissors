@@ -37,7 +37,8 @@ export function PlayingView({
   onRecordRound,
   onBackToMenu,
 }: Props) {
-  const { videoRef, displayGesture, getGesture, ready, error } = useHandGesture();
+  const { videoRef, displayGesture, handDetected, getGesture, ready, error } =
+    useHandGesture();
 
   const onCountdownTick = useCallback(
     (value: number) => {
@@ -51,7 +52,7 @@ export function PlayingView({
   const { phase, countdown, userChoice, cpuChoice, result, missedReveal } =
     useGameRound({
       ready,
-      liveGesture: displayGesture,
+      handDetected,
       getGesture,
       difficulty,
       userHistory,

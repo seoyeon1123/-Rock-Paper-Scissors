@@ -1,9 +1,10 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Lobby } from '@/components/Lobby';
 import { NicknameGate } from '@/components/NicknameGate';
 import { OnlinePlayingView } from '@/components/OnlinePlayingView';
+import { OpponentLeftView } from '@/components/OpponentLeftView';
 import { SoundToggle } from '@/components/SoundToggle';
 import { useOnlineRoom } from '@/hooks/useOnlineRoom';
 import { useSoundEnabled } from '@/hooks/useSoundEnabled';
@@ -18,6 +19,14 @@ export default function PlayRoomPage({ params }: { params: { roomId: string } })
   const [joining, setJoining] = useState(false);
   const [starting, setStarting] = useState(false);
   const [joinErr, setJoinErr] = useState<string | null>(null);
+
+  // 아래 훅들은 early return 위에 있어야 함 (Rules of Hooks).
+  // 상대가 나간 뒤에도 마지막 닉네임을 유지해서 메시지에 보여주려고 ref 에 백업.
+  const opp = state.players.find((p) => p.slot !== state.mySlot);
+  const lastOppNicknameRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (opp?.nickname) lastOppNicknameRef.current = opp.nickname;
+  }, [opp?.nickname]);
 
   const onJoin = async (nickname: string) => {
     setJoining(true);
@@ -113,6 +122,11 @@ export default function PlayRoomPage({ params }: { params: { roomId: string } })
   }
 
   // status === 'ready'
+  const inActiveMatch =
+    state.room?.status === 'playing' || state.room?.status === 'finished';
+  const opponentLeft =
+    inActiveMatch && state.mySlot != null && state.players.length < 2;
+
   return (
     <main className="min-h-screen flex flex-col items-center gap-4 sm:gap-6 px-4 py-6 sm:p-8 w-full max-w-3xl mx-auto">
       <SoundToggle enabled={soundEnabled} onToggle={toggleSound} />
@@ -129,7 +143,15 @@ export default function PlayRoomPage({ params }: { params: { roomId: string } })
         />
       )}
 
-      {state.room &&
+      {opponentLeft && (
+        <OpponentLeftView
+          opponentNickname={lastOppNicknameRef.current ?? undefined}
+          onLeave={onLeave}
+        />
+      )}
+
+      {!opponentLeft &&
+        state.room &&
         state.mySlot != null &&
         (state.room.status === 'playing' || state.room.status === 'finished') && (
           <OnlinePlayingView

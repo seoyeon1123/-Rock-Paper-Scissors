@@ -18,46 +18,55 @@ type Status = { ready: boolean; error: string | null };
  *   never queue a second inference while one is still in flight. On slow
  *   devices this prevents backpressure and keeps the video smooth.
  */
+const GESTURE_BUFFER = 7;
+
 export function useHandGesture() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const gestureRef = useRef<Gesture>('unknown');
+  const handDetectedRef = useRef(false);
+  const bufferRef = useRef<Gesture[]>([]);
   const [displayGesture, setDisplayGesture] = useState<Gesture>('unknown');
+  const [handDetected, setHandDetected] = useState(false);
   const [status, setStatus] = useState<Status>({ ready: false, error: null });
+  const [stream, setStream] = useState<MediaStream | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let rafId = 0;
-    let stream: MediaStream | null = null;
+    let localStream: MediaStream | null = null;
     let hands: any = null;
     let busy = false;
     let lastUiUpdate = 0;
 
     (async () => {
       try {
-        // Constraints are "ideal", not "exact" — so a mismatched webcam still
-        // negotiates the closest supported resolution instead of throwing
-        // NotFoundError. `facingMode` is dropped because desktop webcams
-        // don't expose it and requiring it rejects the device outright.
-        stream = await navigator.mediaDevices
+        // "ideal" (not "exact") keeps desktop webcams working even when they
+        // don't expose facingMode. On mobile it nudges the browser toward the
+        // front/selfie camera, which is what rock-paper-scissors needs.
+        localStream = await navigator.mediaDevices
           .getUserMedia({
-            video: { width: { ideal: 640 }, height: { ideal: 480 } },
+            video: {
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              facingMode: { ideal: 'user' },
+            },
             audio: false,
           })
           .catch(async (err: DOMException) => {
-            // Fallback: try the most permissive request possible.
             if (err.name === 'NotFoundError' || err.name === 'OverconstrainedError') {
               return navigator.mediaDevices.getUserMedia({ video: true, audio: false });
             }
             throw err;
           });
         if (cancelled) {
-          stream.getTracks().forEach((t) => t.stop());
+          localStream.getTracks().forEach((t) => t.stop());
           return;
         }
         const video = videoRef.current;
         if (!video) return;
-        video.srcObject = stream;
+        video.srcObject = localStream;
         await video.play();
+        setStream(localStream);
 
         // Dynamic import keeps MediaPipe (which touches `window`) out of SSR.
         const { Hands } = await import('@mediapipe/hands');
@@ -79,15 +88,19 @@ export function useHandGesture() {
             | 'Left'
             | 'Right';
           const g: Gesture = lm ? recognizeGesture(lm, handed) : 'unknown';
+          const detected = !!lm;
 
           gestureRef.current = g;
+          handDetectedRef.current = detected;
+          const buf = bufferRef.current;
+          buf.push(g);
+          if (buf.length > GESTURE_BUFFER) buf.shift();
 
           const now = performance.now();
           if (now - lastUiUpdate > 100) {
             lastUiUpdate = now;
-            // Functional update + equality guard: React bails out when the
-            // returned value is identical to the previous state.
             setDisplayGesture((prev) => (prev === g ? prev : g));
+            setHandDetected((prev) => (prev === detected ? prev : detected));
           }
         });
 
@@ -119,14 +132,54 @@ export function useHandGesture() {
     return () => {
       cancelled = true;
       if (rafId) cancelAnimationFrame(rafId);
-      stream?.getTracks().forEach((t) => t.stop());
+      localStream?.getTracks().forEach((t) => t.stop());
       try {
         hands?.close?.();
       } catch {}
+      bufferRef.current = [];
+      setStream(null);
     };
   }, []);
 
-  const getGesture = useCallback(() => gestureRef.current, []);
+  // "보!" 순간에 플레이어가 막 낸 손을 읽어야 하므로 최근 프레임을 우선.
+  // - 최근 3프레임에서 유효 제스처가 2개 이상 일치하면 그걸로 확정 (빠른 리빌 대응)
+  // - 그게 안 되면 최근 전체 버퍼의 과반 제스처로 폴백 (단일 프레임 노이즈 방어)
+  // - 둘 다 아니면 즉시값 반환
+  const getGesture = useCallback((): Gesture => {
+    const buf = bufferRef.current;
+    if (buf.length === 0) return gestureRef.current;
 
-  return { videoRef, displayGesture, getGesture, ...status };
+    const tail = buf.slice(-3);
+    const tailCounts: Record<Gesture, number> = {
+      rock: 0,
+      paper: 0,
+      scissors: 0,
+      unknown: 0,
+    };
+    for (const g of tail) tailCounts[g]++;
+    for (const g of ['rock', 'paper', 'scissors'] as const) {
+      if (tailCounts[g] >= 2) return g;
+    }
+
+    const counts: Record<Gesture, number> = {
+      rock: 0,
+      paper: 0,
+      scissors: 0,
+      unknown: 0,
+    };
+    for (const g of buf) counts[g]++;
+    for (const g of ['rock', 'paper', 'scissors'] as const) {
+      if (counts[g] * 2 >= buf.length) return g;
+    }
+    return gestureRef.current;
+  }, []);
+
+  return {
+    videoRef,
+    displayGesture,
+    handDetected,
+    getGesture,
+    stream,
+    ...status,
+  };
 }

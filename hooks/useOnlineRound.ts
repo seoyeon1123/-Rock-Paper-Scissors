@@ -28,10 +28,13 @@ interface Args {
   room: RoomRow | null;
   roundsByNumber: Record<number, RoundRow>;
   ready: boolean;
-  liveGesture: Gesture;
+  handDetected: boolean;
   getGesture: () => Gesture;
   onCountdownTick?: (value: number) => void;
 }
+
+const COUNTDOWN_START = 2;
+const REVEAL_HOLD_MS = 400;
 
 interface RevealSnapshot {
   round: number;
@@ -62,12 +65,12 @@ export function useOnlineRound({
   room,
   roundsByNumber,
   ready,
-  liveGesture,
+  handDetected,
   getGesture,
   onCountdownTick,
 }: Args): OnlineRoundSnapshot {
   const [phase, setPhase] = useState<OnlinePhase>('waiting');
-  const [countdown, setCountdown] = useState(3);
+  const [countdown, setCountdown] = useState(COUNTDOWN_START);
   const [myReadyRound, setMyReadyRound] = useState<number | null>(null);
   const [oppReadyRound, setOppReadyRound] = useState<number | null>(null);
   const [submittedRound, setSubmittedRound] = useState<number | null>(null);
@@ -114,7 +117,7 @@ export function useOnlineRound({
       setOppReadyRound(null);
       setSubmittedRound(null);
       setMissedReveal(false);
-      setCountdown(3);
+      setCountdown(COUNTDOWN_START);
     }, 2000);
     return () => clearTimeout(t);
   }, [phase]);
@@ -135,19 +138,20 @@ export function useOnlineRound({
       if (!s.room || s.room.current_round !== payload.round) return;
       if (s.phase !== 'waiting') return;
       setPhase('countdown');
-      setCountdown(3);
+      setCountdown(COUNTDOWN_START);
     });
     // supabase-js v2 는 specific broadcast listener 를 offset 할 방법이 없음.
     // channel 자체가 unmount 시 제거되므로 실제 누수는 없음.
   }, [channel]);
 
-  // ─── valid 제스처 500ms 유지 → broadcast('ready') ───
+  // ─── 손이 프레임에 보이면 500ms 유지 → broadcast('ready') ───
+  // 유효 제스처를 기다리지 않음. 주먹 쥔 채로 대기하다 "보!" 에 내는 흐름 지원.
   useEffect(() => {
     if (phase !== 'waiting') return;
     if (!channel || !room || mySlot == null) return;
     if (room.status !== 'playing') return;
     if (!ready) return;
-    if (!isValidChoice(liveGesture)) return;
+    if (!handDetected) return;
     const num = room.current_round;
     if (myReadyRound === num) return;
 
@@ -160,7 +164,7 @@ export function useOnlineRound({
       setMyReadyRound(num);
     }, 500);
     return () => clearTimeout(t);
-  }, [phase, ready, liveGesture, myReadyRound, room, mySlot, channel]);
+  }, [phase, ready, handDetected, myReadyRound, room, mySlot, channel]);
 
   // ─── 양쪽 ready 확인 → slot=1 이 'go' 브로드캐스트 + 로컬 카운트다운 시작 ───
   useEffect(() => {
@@ -176,24 +180,28 @@ export function useOnlineRound({
       payload: { round: num },
     });
     setPhase('countdown');
-    setCountdown(3);
+    setCountdown(COUNTDOWN_START);
   }, [phase, myReadyRound, oppReadyRound, room, mySlot, channel]);
 
   // ─── 카운트다운 틱 + reveal 제출 ───
+  // countdown=0 일 때 "보!" 를 REVEAL_HOLD_MS 동안 보여준 뒤 제스처를 캡처.
   useEffect(() => {
     if (phase !== 'countdown') return;
     if (!room) return;
     if (countdown === 0) {
-      const g = getGestureRef.current();
-      const choice: Choice = isValidChoice(g) ? g : randomChoice();
-      if (!isValidChoice(g)) setMissedReveal(true);
-      const num = room.current_round;
-      setSubmittedRound(num);
-      setPhase('committed');
-      submitChoice(roomId, playerId, num, choice).catch(() => {
-        // 서버 에러는 무시 (재시도는 구현 안 함; 일반적으로 네트워크 문제 시 UX 열화 감수)
-      });
-      return;
+      onCountdownTickRef.current?.(0);
+      const t = setTimeout(() => {
+        const g = getGestureRef.current();
+        const choice: Choice = isValidChoice(g) ? g : randomChoice();
+        if (!isValidChoice(g)) setMissedReveal(true);
+        const num = room.current_round;
+        setSubmittedRound(num);
+        setPhase('committed');
+        submitChoice(roomId, playerId, num, choice).catch(() => {
+          // 서버 에러는 무시 (재시도는 구현 안 함)
+        });
+      }, REVEAL_HOLD_MS);
+      return () => clearTimeout(t);
     }
     onCountdownTickRef.current?.(countdown);
     const t = setTimeout(() => setCountdown((c) => c - 1), 1000);

@@ -24,16 +24,16 @@ export const WaitingMessage = memo(function WaitingMessage({
     return <div className="text-slate-300">카메라 연결 중...</div>;
   }
   return (
-    <div className="text-slate-300 text-center">
-      <div className="text-xl">
-        ✋ 카메라에 손을 보여주세요
-      </div>
+    <div className="text-slate-300 text-center px-4">
+      <div className="text-lg sm:text-xl">✋ 카메라에 손을 보여주세요</div>
       <div className="text-sm text-slate-500 mt-1">
-        주먹 · 가위 · 보 중 하나가 인식되면 카운트다운이 시작됩니다
+        손이 보이면 "가위 바위 보!" 카운트다운이 시작돼요.
+        <br />
+        <span className="text-slate-400">"보!"</span> 에 맞춰서 손 모양을 내세요.
       </div>
       {missedReveal && (
         <div className="text-amber-400 text-sm mt-2">
-          직전 라운드에서 손을 인식하지 못했어요. 다시 보여주세요.
+          손 모양을 인식하지 못했어요. 다시 해볼게요.
         </div>
       )}
     </div>

@@ -20,9 +20,13 @@ type Snapshot = {
   missedReveal: boolean;
 };
 
+// 2 → "가위" · 1 → "바위" · 0 → "보!" (리빌)
+const COUNTDOWN_START = 2;
+const REVEAL_HOLD_MS = 400;
+
 const INITIAL: Snapshot = {
   phase: 'waiting',
-  countdown: 3,
+  countdown: COUNTDOWN_START,
   userChoice: null,
   cpuChoice: null,
   result: null,
@@ -31,7 +35,7 @@ const INITIAL: Snapshot = {
 
 interface Args {
   ready: boolean;
-  liveGesture: Gesture;
+  handDetected: boolean;
   getGesture: () => Gesture;
   difficulty: Difficulty;
   userHistory: Choice[];
@@ -42,7 +46,7 @@ interface Args {
 
 export function useGameRound({
   ready,
-  liveGesture,
+  handDetected,
   getGesture,
   difficulty,
   userHistory,
@@ -68,44 +72,49 @@ export function useGameRound({
     if (paused) setState(INITIAL);
   }, [paused]);
 
-  // waiting → countdown
+  // waiting → countdown: 손이 프레임에 보이기만 하면 시작 (주먹 쥐고 대기해도 OK)
   useEffect(() => {
     if (paused) return;
     if (state.phase !== 'waiting') return;
     if (!ready) return;
-    if (!isValidChoice(liveGesture)) return;
+    if (!handDetected) return;
 
     const t = setTimeout(() => {
       setState((s) =>
         s.phase === 'waiting'
-          ? { ...INITIAL, phase: 'countdown', countdown: 3 }
+          ? { ...INITIAL, phase: 'countdown', countdown: COUNTDOWN_START }
           : s
       );
     }, 500);
     return () => clearTimeout(t);
-  }, [state.phase, ready, liveGesture, paused]);
+  }, [state.phase, ready, handDetected, paused]);
 
   // countdown tick + reveal
+  // - countdown > 0: 1초 간격으로 "가위" → "바위" 진행
+  // - countdown === 0: "보!" 를 REVEAL_HOLD_MS 동안 보여주며 그 순간의 제스처 캡처
   useEffect(() => {
     if (state.phase !== 'countdown') return;
 
     if (state.countdown === 0) {
-      const g = getGestureRef.current();
-      if (!isValidChoice(g)) {
-        setState({ ...INITIAL, missedReveal: true });
-        return;
-      }
-      const cpu = cpuPick(userHistoryRef.current, difficultyRef.current);
-      const result = judge(g, cpu);
-      setState((s) => ({
-        ...s,
-        phase: 'result',
-        userChoice: g,
-        cpuChoice: cpu,
-        result,
-      }));
-      onRoundEndRef.current?.(g, cpu, result);
-      return;
+      onCountdownTickRef.current?.(0);
+      const t = setTimeout(() => {
+        const g = getGestureRef.current();
+        if (!isValidChoice(g)) {
+          setState({ ...INITIAL, missedReveal: true });
+          return;
+        }
+        const cpu = cpuPick(userHistoryRef.current, difficultyRef.current);
+        const result = judge(g, cpu);
+        setState((s) => ({
+          ...s,
+          phase: 'result',
+          userChoice: g,
+          cpuChoice: cpu,
+          result,
+        }));
+        onRoundEndRef.current?.(g, cpu, result);
+      }, REVEAL_HOLD_MS);
+      return () => clearTimeout(t);
     }
 
     onCountdownTickRef.current?.(state.countdown);
